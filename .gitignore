@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment / secrets
+.env
+.env.*
+
+# Data cache (never commit fetched GEO files)
+data/cache/
+
+# Web
+web/node_modules/
+web/dist/
+web/build/
+
+# Prompts kept out of the public repo
+prompts/
+
+# OS
+.DS_Store
+Thumbs.db

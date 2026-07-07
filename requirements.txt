@@ -1,0 +1,21 @@
+# Core pipeline
+GEOparse
+pandas
+numpy
+scikit-learn
+mygene
+inmoose
+
+# Claude (metadata parse + verify)
+anthropic
+
+# Web layer (Days 4-5)
+fastapi
+uvicorn[standard]
+python-multipart
+
+# MCP layer (Day 4)
+mcp
+
+# Tests
+pytest
