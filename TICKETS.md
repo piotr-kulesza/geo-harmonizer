@@ -60,6 +60,14 @@ dataset) and the fix (ComBat merges them by biology), legibly, in one take.
 - [x] 1.6 Unit test: fallback path returns a well-formed result (mock a bad GSE).
 - [x] 1.7 `scripts/prewarm_cache.py`: fetch the demo series into `data/cache/` so
       the demo NEVER live-fetches on camera. Record against the cache.
+- [x] 1.8 **Harden fetch download** (GEOparse's FTP truncates large series, e.g.
+      GSE9891 → "Downloaded size do not match"). Two levers, decide later — do NOT
+      block Day 1/2 on this (cache-once is the strategy):
+        (a) Transport: fetch over HTTPS + retry-with-backoff into `data/cache/`,
+            let GEOparse parse the local file (no FTP).
+        (b) Source: prefer `GSE…_series_matrix.txt.gz` (genes×samples + metadata,
+            ~10x smaller, far less truncation) over `family.soft.gz`; probe→gene
+            mapping happens separately anyway.
 
 ## Epic 2 — core.harmonize (Day 2)
 - [ ] 2.1 **(Claude, tool-choice)** Decide probe->symbol source per platform

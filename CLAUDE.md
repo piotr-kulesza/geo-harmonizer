@@ -36,8 +36,12 @@ docs/         series.md, design-brief.md
 ```
 
 ## Settled technical decisions (do not reopen)
-- **GEOparse fetches — no hand-rolled GEO parser.** Series that don't parse
-  cleanly return a `needs_manual_upload` result, not a crash. Honest limitation.
+- **Fetch = series matrix over HTTPS first, GEOparse/SOFT as fallback.** Primary
+  path pulls `GSE…_series_matrix.txt.gz` over HTTPS (what R's `getGEO` uses):
+  compact, already-pivoted, reliable. Parsing it is a bounded ~30-line TSV reader,
+  the one justified exception to "no hand-rolled GEO parser" — GEOparse still
+  handles the SOFT fallback (no SOFT parser of our own). Series that fail both
+  return `needs_manual_upload`, not a crash. Honest limitation.
 - **Existing ComBat only** (inmoose `pycombat_norm` / neuroCombat). OFF by
   default, framed as an option. The scientifically hard part is deliberately cut.
 - **Claude parses free-text metadata**, and a **second Claude pass verifies** the
