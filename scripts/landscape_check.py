@@ -57,6 +57,12 @@ def main() -> int:
     parser.add_argument("accessions", nargs="*", default=DEFAULT_ACCESSIONS)
     parser.add_argument("--cache-dir", default="data/cache")
     parser.add_argument("--collapse", choices=["max", "mean"], default="max")
+    parser.add_argument(
+        "--embed",
+        choices=["pca", "umap", "supervised"],
+        default="supervised",
+        help="2D map layout (default: outcome-supervised UMAP toward survival)",
+    )
     parser.add_argument("--no-combat", action="store_true", help="skip ComBat (debug)")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -104,10 +110,29 @@ def main() -> int:
         return 1
 
     # 2D map (fixed terrain) + risk model.
-    coords = embed(substrate, n_components=2)
+    coords = embed(substrate, n_components=2, method=args.embed, survival=survival)
     cindex = cv_cindex(substrate, survival)
     model = fit_risk(substrate, survival)
     risk = predict_risk(model, substrate)
+
+    # Which samples supervised the map vs. were only projected onto it.
+    supervised_gsm = [g for g in survival.index if g in substrate.columns]
+    n_sup = len(supervised_gsm)
+    n_unlabeled = substrate.shape[1] - n_sup
+    print(f"\nembedding: {args.embed}")
+    if args.embed == "supervised":
+        print(
+            f"  {n_sup} samples supervised the map; {n_unlabeled} were projected "
+            f"by expression structure only."
+        )
+        unlabeled_series = sorted(
+            set(batch.reindex([g for g in substrate.columns if g not in set(supervised_gsm)]).dropna())
+        )
+        if unlabeled_series:
+            print(
+                f"  series without survival (NOT used to supervise, placement tests "
+                f"generalization): {', '.join(unlabeled_series)}"
+            )
 
     print(f"\ncross-validated C-index: {cindex:.3f}")
     print(f"risk range: [{risk.min():.3f}, {risk.max():.3f}] over {risk.shape[0]} samples")

@@ -47,6 +47,8 @@ def embed(
     matrix: pd.DataFrame,
     n_components: int = 2,
     method: str = "pca",
+    survival: Optional[pd.DataFrame] = None,
+    n_pca: int = 50,
     random_state: int = 0,
 ) -> pd.DataFrame:
     """Embed samples into a fixed low-D map from a genes x samples matrix.
@@ -55,9 +57,32 @@ def embed(
         matrix: genes (rows) x samples (GSM columns) — typically the
             ComBat-corrected merged matrix.
         n_components: output dimensions (2 for the terrain plane).
-        method: ``"pca"`` (default, deterministic) or ``"umap"`` (PCA to ~20
-            components then UMAP to ``n_components``).
+        method: how to lay out the map.
+            - ``"pca"`` (default, deterministic): top principal components.
+            - ``"umap"``: unsupervised UMAP on the top PCA components.
+            - ``"supervised"``: outcome-supervised UMAP toward survival — the
+              map organizes by prognosis-relevant biology (see below).
+        survival: required for ``method="supervised"``. A DataFrame indexed by
+            GSM with ``survival_days`` + ``event`` for the cohorts that carry
+            survival. Ignored by the other methods.
+        n_pca: PCA components reduced to before UMAP / used as the supervised
+            feature space.
         random_state: seed for reproducibility.
+
+    Supervised embedding (honesty note): expression is reduced to ``n_pca``
+    deterministic PCA components, then a UMAP is fit on the samples that HAVE
+    survival toward an **out-of-fold** Cox risk target (the same PCA+Cox refit on
+    training folds and predicted for held-out samples). Using out-of-fold risk —
+    not the in-sample risk we later drape as height — keeps the supervision from
+    being the very signal it is meant to reveal. Samples WITHOUT survival (e.g.
+    GSE9891) are held out of the supervised fit (masked / unlabeled) and then
+    projected into the learned space by expression structure alone, so their
+    landing on the risk terrain is a genuine generalization check, not baked in.
+
+    This produces an **outcome-structured representation for visualization**. It
+    is NOT the validation: the risk model's independent cross-validated C-index
+    (:func:`cv_cindex`) remains the gate. We are not claiming the risk gradient
+    is emergent from unsupervised structure.
 
     Returns:
         A samples (GSM index) x ``[x, y, ...]`` DataFrame, deterministic for a
@@ -70,8 +95,14 @@ def embed(
         coords = _pca_transform(samples_by_genes, n_components, random_state)
     elif method == "umap":
         coords = _umap_transform(samples_by_genes, n_components, random_state)
+    elif method == "supervised":
+        if survival is None:
+            raise ValueError("embed(method='supervised') requires a survival frame.")
+        coords = _supervised_transform(matrix, survival, n_components, n_pca, random_state)
     else:
-        raise ValueError(f"embed method must be 'pca' or 'umap', got {method!r}")
+        raise ValueError(
+            f"embed method must be 'pca', 'umap' or 'supervised', got {method!r}"
+        )
 
     labels = ["x", "y", "z"][:n_components] or [f"dim{i}" for i in range(n_components)]
     if n_components > 3:
@@ -278,6 +309,7 @@ def surface(
     height_layer: HeightLayer,
     grid: int = 60,
     method: str = "rbf",
+    extrapolate: bool = False,
 ):
     """Smooth a height layer over a grid spanning the 2D map.
 
@@ -287,10 +319,15 @@ def surface(
         grid: mesh resolution per axis.
         method: ``"rbf"`` (scipy radial-basis smoothing) or ``"griddata"``
             (scipy linear interpolation with nearest-fill).
+        extrapolate: if ``False`` (default), grid cells OUTSIDE the convex hull
+            of the samples are set to ``NaN`` — the surface exists only where
+            there are actually tumors, so no phantom peaks are invented in empty
+            corners. If ``True``, the interpolated grid is returned unclipped.
 
     Returns:
         ``(XX, YY, ZZ)`` meshgrids (each ``grid`` x ``grid``) for a 3D surface.
-        Pure and deterministic.
+        With ``extrapolate=False``, ``ZZ`` is ``NaN`` outside the sample hull and
+        finite inside. Pure and deterministic.
     """
     xy = coords_xy[["x", "y"]].copy()
     values = height_layer.values.reindex(xy.index)
@@ -313,6 +350,9 @@ def surface(
         ZZ = _griddata_interpolate(points, z, mesh).reshape(XX.shape)
     else:
         raise ValueError(f"surface method must be 'rbf' or 'griddata', got {method!r}")
+
+    if not extrapolate:
+        ZZ = _clip_to_hull(points, mesh, ZZ)
     return XX, YY, ZZ
 
 
@@ -377,8 +417,92 @@ def _umap_transform(samples_by_genes_centered, n_components, random_state):
     pre = min(20, *samples_by_genes_centered.shape)
     pca = PCA(n_components=pre, svd_solver="full", random_state=random_state)
     reduced = pca.fit_transform(samples_by_genes_centered)
-    reducer = umap.UMAP(n_components=n_components, random_state=random_state)
+    reducer = umap.UMAP(n_components=n_components, random_state=random_state, n_jobs=1)
     return reducer.fit_transform(reduced)
+
+
+def _supervised_transform(matrix, survival, n_components, n_pca, random_state):
+    """Outcome-supervised UMAP: fit on survival cohorts, project the rest.
+
+    Returns coords (n_samples x n_components) in ``matrix.columns`` order. See
+    :func:`embed` for the design rationale (out-of-fold target, held-out
+    unlabeled samples). Deterministic: fixed PCA + ``random_state`` + ``n_jobs=1``.
+    """
+    import umap  # lazy
+
+    # Fixed, deterministic PCA feature space for ALL samples.
+    samples_by_genes, _, _ = _standardize_columns_as_samples(matrix)
+    n_comp = min(n_pca, *samples_by_genes.shape)
+    comps_all = _pca_transform(samples_by_genes, n_comp, random_state)
+    comps_all = pd.DataFrame(comps_all, index=pd.Index(matrix.columns, name="sample"))
+
+    # Labeled = samples with usable survival; unlabeled = everything else.
+    expr, durations, events = _align_survival(matrix, survival)
+    labeled = list(expr.index)
+    unlabeled = [g for g in matrix.columns if g not in set(labeled)]
+
+    target = _oof_cox_risk(expr, durations, events, n_pca, penalizer=0.1,
+                           folds=5, random_state=random_state)
+
+    reducer = umap.UMAP(
+        n_components=n_components,
+        target_metric="l2",  # continuous supervision toward out-of-fold risk
+        random_state=random_state,
+        n_jobs=1,
+    )
+    reducer.fit(comps_all.loc[labeled].to_numpy(), y=target.loc[labeled].to_numpy())
+
+    coords = pd.DataFrame(index=comps_all.index, columns=range(n_components), dtype=float)
+    coords.loc[labeled] = reducer.embedding_
+    if unlabeled:
+        # Placed by expression structure alone (a generalization check).
+        coords.loc[unlabeled] = reducer.transform(comps_all.loc[unlabeled].to_numpy())
+    logger.info(
+        "supervised embed: %d labeled (survival), %d unlabeled (projected).",
+        len(labeled),
+        len(unlabeled),
+    )
+    return coords.to_numpy(dtype=float)
+
+
+def _oof_cox_risk(expr, durations, events, n_pca, penalizer, folds, random_state):
+    """Out-of-fold Cox risk per labeled sample (PCA+Cox refit per training fold).
+
+    Returns a Series of held-out risk indexed by GSM (``expr.index``). Any sample
+    left unpredicted (e.g. a fold with no training events) is filled from a global
+    fit so every labeled sample carries a target.
+    """
+    from sklearn.model_selection import KFold  # lazy
+
+    n = expr.shape[0]
+    oof = pd.Series(np.nan, index=expr.index, name="risk", dtype=float)
+    k = min(folds, n)
+    if k >= 2:
+        kf = KFold(n_splits=k, shuffle=True, random_state=random_state)
+        for tr_idx, te_idx in kf.split(np.arange(n)):
+            tr_expr = expr.iloc[tr_idx]
+            te_expr = expr.iloc[te_idx]
+            tr_dur, tr_evt = durations.iloc[tr_idx], events.iloc[tr_idx]
+            if tr_evt.sum() < 1:
+                continue
+            pca, center, labels, tr_comp = _fit_pca_on(tr_expr, n_pca)
+            cox = _fit_cox(tr_comp, tr_dur, tr_evt, labels, penalizer)
+            te_comp = pd.DataFrame(
+                pca.transform(te_expr.to_numpy(dtype=float) - center),
+                index=te_expr.index,
+                columns=labels,
+            )
+            oof.iloc[te_idx] = np.asarray(cox.predict_log_partial_hazard(te_comp)).ravel()
+
+    if oof.isna().any():
+        # Fallback for unassigned samples (few labels / skipped folds).
+        pca, center, labels, comp = _fit_pca_on(expr, n_pca)
+        cox = _fit_cox(comp, durations, events, labels, penalizer)
+        pred = pd.Series(
+            np.asarray(cox.predict_log_partial_hazard(comp)).ravel(), index=expr.index
+        )
+        oof[oof.isna()] = pred[oof.isna()]
+    return oof
 
 
 def _align_survival(matrix: pd.DataFrame, survival: pd.DataFrame):
@@ -448,6 +572,26 @@ def _rbf_interpolate(points, z, mesh):
     # Smoothing keeps the surface readable rather than spiking at each point.
     interp = RBFInterpolator(points, z, smoothing=1.0, kernel="thin_plate_spline")
     return interp(mesh)
+
+
+def _clip_to_hull(points, mesh, ZZ):
+    """Set grid cells outside the convex hull of ``points`` to ``NaN``.
+
+    Uses ``Delaunay.find_simplex`` as the inside test (>= 0 means inside). Falls
+    back to the unclipped grid if the points are degenerate (collinear), where a
+    hull is undefined.
+    """
+    from scipy.spatial import Delaunay, QhullError  # lazy
+
+    try:
+        tri = Delaunay(points)
+    except QhullError:
+        logger.warning("_clip_to_hull: degenerate hull — returning unclipped grid.")
+        return ZZ
+    inside = (tri.find_simplex(mesh) >= 0).reshape(ZZ.shape)
+    clipped = ZZ.copy()
+    clipped[~inside] = np.nan
+    return clipped
 
 
 def _griddata_interpolate(points, z, mesh):

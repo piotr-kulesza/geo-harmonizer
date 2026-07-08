@@ -48,6 +48,47 @@ def _planted(n_samples: int = 60, n_genes: int = 200, seed: int = 0):
     return matrix, survival
 
 
+def _planted_with_nuisance(n_samples: int = 90, n_genes: int = 400, seed: int = 1):
+    """Like ``_planted`` but the risk axis is buried under dominant nuisance axes.
+
+    Two nuisance latents (uncorrelated with survival) drive many high-variance
+    genes, so the top-2 principal components capture nuisance and MISS the risk
+    axis ``z`` — it sits around PC3. This is the realistic batch-vs-biology case:
+    unsupervised 2D PCA cannot show the prognosis gradient, but a supervised
+    embedding, guided toward outcome, can pull ``z`` out. Returns
+    ``(matrix, survival, z)`` (``z`` = the planted per-sample risk latent).
+    """
+    rng = np.random.default_rng(seed)
+    z = rng.normal(size=n_samples)  # risk latent
+
+    data = np.zeros((n_genes, n_samples))
+    for i in range(20):  # risk genes -> a mid-rank PC
+        data[i] = 3.0 * z + rng.normal(scale=0.4, size=n_samples)
+    idx = 20
+    for _ in range(2):  # two dominant nuisance blocks (batch-like)
+        w = rng.normal(size=n_samples)
+        for _ in range(30):
+            data[idx] = 3.0 * w + rng.normal(scale=0.4, size=n_samples)
+            idx += 1
+    for i in range(idx, n_genes):  # noise genes
+        data[i] = rng.normal(size=n_samples)
+
+    genes = [f"g{i}" for i in range(n_genes)]
+    samples = [f"GSM{i}" for i in range(n_samples)]
+    matrix = pd.DataFrame(data, index=genes, columns=samples)
+
+    durations = np.clip(500.0 * np.exp(-0.8 * z) + rng.normal(scale=15, size=n_samples), 10, None)
+    events = np.ones(n_samples, dtype=int)
+    survival = pd.DataFrame({"survival_days": durations, "event": events}, index=samples)
+    return matrix, survival, pd.Series(z, index=samples)
+
+
+def _best_axis_corr(coords: pd.DataFrame, target: pd.Series) -> float:
+    """Max |corr| of either embedding axis with a per-sample target."""
+    t = target.reindex(coords.index).to_numpy()
+    return max(abs(np.corrcoef(coords[c].to_numpy(), t)[0, 1]) for c in ["x", "y"])
+
+
 # --------------------------------------------------------------------------- #
 # embed
 # --------------------------------------------------------------------------- #
@@ -61,6 +102,50 @@ def test_embed_shape_and_determinism():
     assert list(a.index) == list(matrix.columns)
     assert a.index.name == "sample"
     pd.testing.assert_frame_equal(a, b)  # deterministic
+
+
+def test_supervised_embedding_organizes_by_outcome():
+    # Risk axis is buried under dominant nuisance: unsupervised 2D PCA misses it,
+    # the outcome-supervised map recovers it.
+    matrix, survival, z = _planted_with_nuisance()
+
+    pca_coords = embed(matrix, n_components=2, method="pca")
+    sup_coords = embed(matrix, n_components=2, method="supervised", survival=survival)
+
+    pca_corr = _best_axis_corr(pca_coords, z)
+    sup_corr = _best_axis_corr(sup_coords, z)
+
+    assert pca_corr < 0.4  # nuisance dominates the top-2 PCs
+    assert sup_corr > pca_corr + 0.2  # supervision clearly recovers the risk axis
+
+
+def test_supervised_embedding_is_deterministic():
+    matrix, survival, _ = _planted_with_nuisance()
+    a = embed(matrix, n_components=2, method="supervised", survival=survival)
+    b = embed(matrix, n_components=2, method="supervised", survival=survival)
+    pd.testing.assert_frame_equal(a, b)
+
+
+def test_supervised_embedding_places_unlabeled_by_signal():
+    # Withhold survival for half the samples: they are still embedded (no crash)
+    # and land near same-signal labeled samples (projected by expression only).
+    matrix, survival, z = _planted_with_nuisance()
+    labeled = list(matrix.columns[: matrix.shape[1] * 2 // 3])
+    unlabeled = [g for g in matrix.columns if g not in set(labeled)]
+    partial = survival.loc[labeled]
+
+    coords = embed(matrix, n_components=2, method="supervised", survival=partial)
+
+    assert list(coords.index) == list(matrix.columns)  # all samples embedded
+    assert np.isfinite(coords.to_numpy()).all()
+    # The held-out samples' placement still tracks their planted risk.
+    assert _best_axis_corr(coords.loc[unlabeled], z.loc[unlabeled]) > 0.4
+
+
+def test_embed_supervised_requires_survival():
+    matrix, _, _ = _planted_with_nuisance()
+    with pytest.raises(ValueError):
+        embed(matrix, method="supervised")
 
 
 # --------------------------------------------------------------------------- #
@@ -134,13 +219,34 @@ def test_surface_shape_and_determinism():
     model = fit_risk(matrix, survival, n_pca=15)
     layer = risk_layer(model, matrix)
 
-    XX1, YY1, ZZ1 = surface(coords, layer, grid=25, method="rbf")
-    XX2, YY2, ZZ2 = surface(coords, layer, grid=25, method="rbf")
+    XX1, YY1, ZZ1 = surface(coords, layer, grid=25, method="rbf", extrapolate=True)
+    XX2, YY2, ZZ2 = surface(coords, layer, grid=25, method="rbf", extrapolate=True)
 
     assert XX1.shape == (25, 25)
     assert ZZ1.shape == (25, 25)
-    assert np.isfinite(ZZ1).all()
+    assert np.isfinite(ZZ1).all()  # extrapolate=True fills the whole grid
     np.testing.assert_allclose(ZZ1, ZZ2)  # deterministic
+
+
+def test_surface_clips_to_data_hull():
+    # Default (extrapolate=False): finite inside the sample hull, NaN outside.
+    matrix, survival = _planted()
+    coords = embed(matrix, n_components=2)
+    model = fit_risk(matrix, survival, n_pca=15)
+    layer = risk_layer(model, matrix)
+
+    _, _, ZZ_clip = surface(coords, layer, grid=30, method="rbf")
+    _, _, ZZ_full = surface(coords, layer, grid=30, method="rbf", extrapolate=True)
+
+    assert np.isnan(ZZ_clip).any()  # some cells fall outside the hull
+    assert np.isfinite(ZZ_clip).any()  # but the interior is filled
+    # Clipping never invents values: inside cells match the unclipped grid.
+    inside = ~np.isnan(ZZ_clip)
+    np.testing.assert_allclose(ZZ_clip[inside], ZZ_full[inside])
+
+    # Deterministic (NaN-aware).
+    _, _, ZZ_clip2 = surface(coords, layer, grid=30, method="rbf")
+    np.testing.assert_allclose(ZZ_clip, ZZ_clip2, equal_nan=True)
 
 
 def test_landscape_model_produces_surface_for_a_layer():
