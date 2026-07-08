@@ -94,18 +94,18 @@ dataset) and the fix (ComBat merges them by biology), legibly, in one take.
 - [x] 3.5 Unit test: merge intersects genes correctly; combat preserves shape.
 
 ## Epic 4 — core.metadata + Claude (Day 3 — the Claude Use quadrant)
-- [ ] 4.1 Define `TARGET_SCHEMA` (stage, grade, histology, survival_days, event).
-- [ ] 4.2 **(Claude, MAP)** `parse_metadata()`: one batched call per dataset maps
+- [x] 4.1 Define `TARGET_SCHEMA` (stage, grade, histology, survival_days, event).
+- [x] 4.2 **(Claude, MAP)** `parse_metadata()`: one batched call per dataset maps
       that dataset's full field set -> schema. Never one call per field/sample.
-- [ ] 4.3 **(Claude, VERIFY)** `verify_mapping()`: second pass checks cross-dataset
+- [x] 4.3 **(Claude, VERIFY)** `verify_mapping()`: second pass checks cross-dataset
       consistency (grade 3 == G3? survival units match?) and flags the uncertain.
-- [ ] 4.4 Return an audit trail (`raw_to_schema`) + `flags` for user approval.
-- [ ] 4.5 User approve/correct step (not blind automation) — surfaced in the UI later.
-- [ ] 4.6 Prompt + response caching so re-runs don't re-spend credits.
-- [ ] 4.7 **CORE FREEZE.** If time is short, trim schema fields — do NOT push core
+- [x] 4.4 Return an audit trail (`raw_to_schema`) + `flags` for user approval.
+- [x] 4.5 User approve/correct step (not blind automation) — surfaced in the UI later.
+- [x] 4.6 Prompt + response caching so re-runs don't re-spend credits.
+- [x] 4.7 **CORE FREEZE.** If time is short, trim schema fields — do NOT push core
       past today. Defense line before travel/async work.
-- [ ] 4.8 Unit test: mapping on captured raw fields; verifier flags a seeded mismatch.
-- [ ] 4.9 **MCP seam:** make the Anthropic call in `parse_metadata` INJECTABLE,
+- [x] 4.8 Unit test: mapping on captured raw fields; verifier flags a seeded mismatch.
+- [x] 4.9 **MCP seam:** make the Anthropic call in `parse_metadata` INJECTABLE,
       not hardwired. Web path calls the API internally; MCP path can expose raw
       metadata + target schema for the calling Claude to map/verify natively.
       Decide dual-mode vs single here, with real data. (See CLAUDE.md → "The MCP

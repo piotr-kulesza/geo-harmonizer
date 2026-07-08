@@ -68,8 +68,14 @@ cross-dataset signal is confounded by batch pre-ComBat and coherent after.
 Candidates to check first: WT1, PAX8 (canonical serous markers). Not a Day-2
 blocker; validated at Epic 8.4.
 
-## PCA note (Epic 3.4)
-Consider restricting the hero PCA to comparable malignant serous tumors (drop
-GSE9891's LMP and GSE26712's normals) so the clouds reflect batch, not sample-type
-biology. The whole-dataset batch effect will dominate regardless — decide when the
-matrix is in hand.
+## PCA note (Epic 3.4) — VALIDATED ✓
+Hero visual passes on the real demo set (12,920 shared genes × 587 samples):
+- **Before ComBat:** three cleanly separated clouds by dataset; batch silhouette
+  **+0.911**. PC1 (48%) ≈ platform axis (GPL570 vs GPL96), PC2 (17%) separates the
+  two GPL570 studies.
+- **After ComBat:** clouds intermixed around origin; batch silhouette **−0.145**
+  (less separable than random → batch signal removed). Chaos → order.
+- Whole-dataset batch effect dominated, so no sample-type filtering was needed;
+  `--serous-only` stays a documented option, not required for the hero visual.
+Pitch line: "samples went from clustering by lab (silhouette 0.91) to fully
+intermixed by biology (−0.15) — one toggle."
