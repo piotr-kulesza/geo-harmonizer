@@ -336,4 +336,27 @@ def create_app(
         }
         return out
 
+    # One-origin demo: if the frontend has been built, serve it at "/" so
+    # `uvicorn web.api:app` hosts API + UI together (no CORS on camera). Mounted
+    # LAST so /api/* routes above win; a no-op when the build is absent (tests
+    # never build, so this changes nothing for them).
+    dist = Path(__file__).resolve().parent / "frontend" / "dist"
+    if dist.is_dir():
+        from fastapi.staticfiles import StaticFiles
+
+        app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
+        logger.info("mounted built frontend at / from %s", dist)
+
     return app
+
+
+def __getattr__(name: str):
+    """Lazily build ``web.api.app`` on first access (PEP 562).
+
+    Lets ``uvicorn web.api:app`` work while keeping ``import web`` / ``import
+    web.api`` free of FastAPI — the app (and thus FastAPI) is only constructed
+    when something actually reads the ``app`` attribute.
+    """
+    if name == "app":
+        return create_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
