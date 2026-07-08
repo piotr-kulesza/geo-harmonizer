@@ -216,11 +216,28 @@ def parse_metadata(
         out_specs[accession] = spec
         frames.append(apply_mapping(raw_df, spec))
 
-    if frames:
-        standardized = pd.concat(frames)
-    else:
-        standardized = pd.DataFrame(columns=[*TARGET_SCHEMA, "dataset"])
+    standardized = _concat_standardized(frames)
     return MappingResult(standardized=standardized, specs=out_specs, flags=[])
+
+
+_FULL_COLUMNS: tuple[str, ...] = (*TARGET_SCHEMA, "dataset")
+
+
+def _concat_standardized(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    """Row-concatenate per-dataset frames onto the full schema, warning-free.
+
+    ``pd.concat`` emits a FutureWarning when any frame is empty or all-NA (a
+    dataset with no survival contributes all-NA ``survival_days``/``event``
+    columns; a sample-less dataset an empty frame). We drop empty frames (they add
+    no rows) and let each frame's all-NA columns sit out the dtype inference, then
+    reindex back to the full schema — so the resulting table is identical (same
+    rows, values, NaNs) but the deprecation no longer fires.
+    """
+    frames = [f for f in frames if not f.empty]
+    if not frames:
+        return pd.DataFrame(columns=list(_FULL_COLUMNS))
+    trimmed = [f.dropna(axis=1, how="all") for f in frames]
+    return pd.concat(trimmed).reindex(columns=list(_FULL_COLUMNS))
 
 
 def verify_mapping(

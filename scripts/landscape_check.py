@@ -41,6 +41,45 @@ OUTPUT_DIR = Path("outputs")
 GATE = 0.60
 
 
+def _usable_survival(standardized, sample_ids) -> list[str]:
+    """GSMs (within ``sample_ids``) with usable survival for the risk model.
+
+    Mirrors ``core.landscape._align_survival`` EXACTLY — numeric ``survival_days``
+    > 0 and a defined numeric ``event`` — so the reported supervised set matches
+    the samples ``fit_risk``/``cv_cindex`` actually use and can't drift.
+    """
+    import pandas as pd  # lazy: keep script import cheap
+
+    shared = [g for g in sample_ids if g in standardized.index]
+    dur = pd.to_numeric(standardized.loc[shared, "survival_days"], errors="coerce")
+    evt = pd.to_numeric(standardized.loc[shared, "event"], errors="coerce")
+    keep = dur.notna() & evt.notna() & (dur > 0)
+    return [g for g, k in zip(shared, keep) if k]
+
+
+def _survival_supervision(standardized, batch, sample_ids):
+    """Break the supervised set down by series for an honest report.
+
+    Returns ``(usable_gsm, per_series, held_out)`` where ``per_series`` is a list
+    of ``(series, n_supervised, n_total)`` and ``held_out`` names the series with
+    ZERO usable-survival samples. The per-series ``n_supervised`` counts sum to
+    ``len(usable_gsm)`` by construction, so a series with some-but-not-all NaN
+    survival is counted as contributing, never flagged held-out.
+    """
+    sample_ids = list(sample_ids)
+    usable = _usable_survival(standardized, sample_ids)
+    usable_set = set(usable)
+    labels = batch.reindex(sample_ids)
+    per_series: list[tuple[str, int, int]] = []
+    held_out: list[str] = []
+    for series, members in labels.groupby(labels):
+        n_sup = sum(1 for g in members.index if g in usable_set)
+        per_series.append((str(series), n_sup, len(members)))
+        if n_sup == 0:
+            held_out.append(str(series))
+    return usable, per_series, sorted(held_out)
+
+
 def _load_dotenv() -> None:
     env_path = Path(".env")
     if not env_path.exists():
@@ -101,11 +140,14 @@ def main() -> int:
         print("ANTHROPIC_API_KEY not set — cannot standardize survival. Aborting.")
         return 2
     mapping = parse_metadata(raw_meta)
-    survival = mapping.standardized[["survival_days", "event"]].dropna()
-    survival = survival[survival.index.isin(substrate.columns)]
-    print(f"samples with usable survival: {survival.shape[0]}")
+    # ONE usable-survival mask, identical to the criterion fit_risk/cv_cindex
+    # apply (numeric duration > 0 AND defined event), so the report below can't
+    # drift from the samples the model actually uses.
+    usable_gsm = _usable_survival(mapping.standardized, substrate.columns)
+    survival = mapping.standardized.loc[usable_gsm, ["survival_days", "event"]]
+    print(f"samples with usable survival: {len(usable_gsm)}")
 
-    if survival.shape[0] < 10:
+    if len(usable_gsm) < 10:
         print("Too few survival samples to validate a risk model — stopping.")
         return 1
 
@@ -115,23 +157,25 @@ def main() -> int:
     model = fit_risk(substrate, survival)
     risk = predict_risk(model, substrate)
 
-    # Which samples supervised the map vs. were only projected onto it.
-    supervised_gsm = [g for g in survival.index if g in substrate.columns]
-    n_sup = len(supervised_gsm)
+    # Which samples supervised the map vs. were only projected onto it. Uses the
+    # SAME usable-survival set as the model — no per-series "has any NaN" test.
+    n_sup = len(usable_gsm)
     n_unlabeled = substrate.shape[1] - n_sup
     print(f"\nembedding: {args.embed}")
     if args.embed == "supervised":
+        _, per_series, held_out = _survival_supervision(
+            mapping.standardized, batch, substrate.columns
+        )
         print(
             f"  {n_sup} samples supervised the map; {n_unlabeled} were projected "
             f"by expression structure only."
         )
-        unlabeled_series = sorted(
-            set(batch.reindex([g for g in substrate.columns if g not in set(supervised_gsm)]).dropna())
-        )
-        if unlabeled_series:
+        for series, n_series_sup, n_total in per_series:
+            print(f"    {series}: {n_series_sup}/{n_total} supervised")
+        if held_out:
             print(
-                f"  series without survival (NOT used to supervise, placement tests "
-                f"generalization): {', '.join(unlabeled_series)}"
+                f"  held out — no usable survival, NOT used to supervise (placement "
+                f"tests generalization): {', '.join(held_out)}"
             )
 
     print(f"\ncross-validated C-index: {cindex:.3f}")

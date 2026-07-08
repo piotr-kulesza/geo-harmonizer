@@ -173,6 +173,36 @@ def test_parse_metadata_one_llm_call_per_dataset(tmp_path):
     assert result.standardized["survival_days"].max() == pytest.approx(2 * 365.25)
 
 
+def test_parse_metadata_mixed_survival_no_futurewarning(tmp_path):
+    # A mix of datasets — one WITH survival, one WITHOUT (all-NA survival cols),
+    # one with zero samples (empty frame) — must not trip pandas' concat
+    # FutureWarning about empty/all-NA entries, and must leave the table unchanged.
+    import warnings
+
+    raw_full = _raw(1)  # has char::os_years + char::status -> real survival
+    raw_nosurv = _raw(2).drop(columns=["char::os_years", "char::status"])  # all-NA survival
+    raw_empty = _raw(3).iloc[0:0]  # zero samples -> empty per-dataset frame
+    llm = CountingLLM(CANNED_SPEC)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)  # any FutureWarning -> failure
+        result = parse_metadata(
+            {"GSE1": raw_full, "GSE2": raw_nosurv, "GSE3": raw_empty},
+            llm=llm,
+            cache_dir=str(tmp_path),
+        )
+
+    # Behavior unchanged: full schema, rows = 3 + 3 + 0, values intact.
+    assert list(result.standardized.columns) == [*TARGET_SCHEMA, "dataset"]
+    assert result.standardized.shape[0] == 6
+    assert set(result.standardized["dataset"]) == {"GSE1", "GSE2"}
+    assert result.standardized.loc["GSM11", "survival_days"] == pytest.approx(2 * 365.25)
+    # The no-survival dataset keeps its rows but has all-NA survival.
+    g2 = result.standardized[result.standardized["dataset"] == "GSE2"]
+    assert g2.shape[0] == 3
+    assert g2["survival_days"].isna().all() and g2["event"].isna().all()
+
+
 def test_build_mapping_spec_survives_json_fences(tmp_path):
     llm = CountingLLM(CANNED_SPEC, fence=True)  # wraps reply in ```json fences
     summary = build_dataset_summary(_raw(), "GSE1")

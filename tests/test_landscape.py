@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -87,6 +90,25 @@ def _best_axis_corr(coords: pd.DataFrame, target: pd.Series) -> float:
     """Max |corr| of either embedding axis with a per-sample target."""
     t = target.reindex(coords.index).to_numpy()
     return max(abs(np.corrcoef(coords[c].to_numpy(), t)[0, 1]) for c in ["x", "y"])
+
+
+def _load_check_script():
+    """Import scripts/landscape_check.py by path (offline; runs no main)."""
+    path = Path(__file__).resolve().parent.parent / "scripts" / "landscape_check.py"
+    spec = importlib.util.spec_from_file_location("landscape_check", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _survival_frame(days, events, datasets):
+    """Build a standardized-style frame + matching batch Series from parallel lists."""
+    idx = pd.Index([f"GSM{i}" for i in range(len(days))], name="sample")
+    std = pd.DataFrame(
+        {"survival_days": days, "event": events, "dataset": datasets}, index=idx
+    )
+    batch = pd.Series(datasets, index=idx)
+    return std, batch
 
 
 # --------------------------------------------------------------------------- #
@@ -260,3 +282,63 @@ def test_landscape_model_produces_surface_for_a_layer():
     assert ZZ.shape == (20, 20)
     with pytest.raises(KeyError):
         landscape.surface("does-not-exist")
+
+
+# --------------------------------------------------------------------------- #
+# landscape_check.py — held-out / supervised reporting (count-based, no drift)
+# --------------------------------------------------------------------------- #
+def test_report_flags_only_series_with_zero_usable_survival():
+    lc = _load_check_script()
+    # A: all four samples usable. B: none (all-NA survival).
+    std, batch = _survival_frame(
+        days=[365.0, 700.0, 500.0, 900.0, np.nan, np.nan],
+        events=[1, 0, 1, 1, np.nan, np.nan],
+        datasets=["A", "A", "A", "A", "B", "B"],
+    )
+    usable, per_series, held_out = lc._survival_supervision(std, batch, std.index)
+
+    assert held_out == ["B"]  # ONLY the series with zero usable survival
+    per = dict((s, (n, tot)) for s, n, tot in per_series)
+    assert per["A"][0] > 0  # A supervised the map
+    assert per["A"] == (4, 4)
+    # Per-series supervised counts sum to the usable-survival mask exactly.
+    assert sum(n for _, n, _ in per_series) == len(usable)
+    assert set(usable) == {"GSM0", "GSM1", "GSM2", "GSM3"}
+
+
+def test_report_counts_partial_nan_series_as_contributing():
+    lc = _load_check_script()
+    # A has partial NaN / a zero-duration row (unusable), but SOME usable samples,
+    # so it must count as contributing — never flagged held-out.
+    std, batch = _survival_frame(
+        days=[365.0, np.nan, 0.0, 800.0, np.nan],
+        events=[1, 1, 1, 0, np.nan],
+        datasets=["A", "A", "A", "A", "B"],
+    )
+    usable, per_series, held_out = lc._survival_supervision(std, batch, std.index)
+
+    per = dict((s, (n, tot)) for s, n, tot in per_series)
+    assert "A" not in held_out  # partial NaN != held out
+    assert per["A"] == (2, 4)  # GSM0 + GSM3 usable; NaN-day and 0-day excluded
+    assert held_out == ["B"]  # B is the only zero-usable series
+    assert sum(n for _, n, _ in per_series) == len(usable) == 2
+
+
+def test_usable_survival_matches_align_survival_criterion():
+    # The report's mask must equal the samples the risk model actually fits.
+    from core.landscape import _align_survival
+
+    lc = _load_check_script()
+    std, _ = _survival_frame(
+        days=[365.0, np.nan, 0.0, 800.0],
+        events=[1, 1, 1, 0],
+        datasets=["A", "A", "A", "A"],
+    )
+    matrix = pd.DataFrame(
+        np.random.default_rng(0).normal(size=(10, 4)),
+        index=[f"g{i}" for i in range(10)],
+        columns=std.index,
+    )
+    report_usable = set(lc._usable_survival(std, matrix.columns))
+    expr, _, _ = _align_survival(matrix, std[["survival_days", "event"]])
+    assert report_usable == set(expr.index)
