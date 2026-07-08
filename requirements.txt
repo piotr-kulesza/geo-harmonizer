@@ -6,6 +6,11 @@ scikit-learn
 mygene
 inmoose
 
+# Landscape (risk model + surface)
+lifelines
+scipy
+umap-learn  # optional — only for embed(method="umap")
+
 # Claude (metadata parse + verify)
 anthropic
 

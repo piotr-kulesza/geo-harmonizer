@@ -100,7 +100,8 @@ dataset) and the fix (ComBat merges them by biology), legibly, in one take.
 - [x] 4.3 **(Claude, VERIFY)** `verify_mapping()`: second pass checks cross-dataset
       consistency (grade 3 == G3? survival units match?) and flags the uncertain.
 - [x] 4.4 Return an audit trail (`raw_to_schema`) + `flags` for user approval.
-- [x] 4.5 User approve/correct step (not blind automation) — surfaced in the UI later.
+- [ ] 4.5 User approve/correct step (not blind automation) — front-end work, Day 5.
+      Audit trail (specs + flags) is built; the UI to review/edit it is Epic 7.
 - [x] 4.6 Prompt + response caching so re-runs don't re-spend credits.
 - [x] 4.7 **CORE FREEZE.** If time is short, trim schema fields — do NOT push core
       past today. Defense line before travel/async work.

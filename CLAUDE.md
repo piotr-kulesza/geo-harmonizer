@@ -14,6 +14,17 @@ Hackathon: *Built with Claude: Life Sciences — Builder Track*. Submission due
 **Mon 13 July, 9:00 PM ET**. Deliverable is a **pitch** (3-min demo video +
 public repo + 100–200 word description), not a README dump.
 
+## Disease risk landscape (built on the harmonized substrate)
+On top of the harmonized+ComBat matrix we build a **disease risk landscape**
+(`core/landscape.py`): embed every tumor into a fixed 2D map, and drape a
+**pluggable per-sample height** over it. The validated default height is
+predicted survival risk (PCA→penalized Cox, fit + cross-validated ONLY on the
+cohorts that carry survival, then predicted for all samples). Height is
+swappable — a gene signature or single gene works on the same map ("choose the
+height while analyzing"). The cross-validated C-index (≥ ~0.6) is the gate that
+says the landscape is meaningful. Core stays pure: the 3D render lives in the
+check script, not in `core/`.
+
 ## Iron rule — the core is interface-agnostic
 `core/` is pure logic. Functions take arguments, return data. **Zero** web/MCP/UI
 knowledge in the core. The web layer and the MCP layer are both thin wrappers.
@@ -28,6 +39,7 @@ core/         pure pipeline (no UI)
   merge.py        merge({acc: matrix}) -> (matrix, batch)    [Day 2 end]
   combat.py       combat(merged, batch)                      [Day 2 end/3]
   metadata.py     parse_metadata() + verify_mapping()        [Day 3 — Claude]
+  landscape.py    embed(), fit_risk(), surface()             [Landscape v1]
 web/          React + FastAPI thin layer                     [Day 4-5]
 mcp/          MCP server thin layer                          [Day 4]
 tests/        pytest
