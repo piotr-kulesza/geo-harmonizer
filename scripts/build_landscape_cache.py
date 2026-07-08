@@ -41,6 +41,7 @@ from core.landscape import (  # noqa: E402
     landscape_payload,
     usable_survival_ids,
 )
+from core.projection import progressive_projection  # noqa: E402
 from web.api import Bundle, DEFAULT_GRID, _build_base_layers, save_bundle  # noqa: E402
 
 DEFAULT_ACCESSIONS = ["GSE9891", "GSE26712", "GSE26193"]
@@ -95,8 +96,21 @@ def main() -> int:
         return 1
 
     merged, batch = merge(matrices)
-    substrate = merged if args.no_combat else combat(merged, batch)
+    combat_substrate = None if args.no_combat else combat(merged, batch)
+    substrate = merged if args.no_combat else combat_substrate
     print(f"\nsubstrate: {substrate.shape[0]} genes x {substrate.shape[1]} samples")
+
+    # Act 1: fixed-basis progressive PCA (raw clouds separate by batch -> ComBat
+    # merges them). Fit ONCE on the raw merged matrix; project both states.
+    progression = progressive_projection(merged, batch, corrected=combat_substrate)
+    last = progression["steps"][-1]
+    print(
+        "PCA progression: {} datasets, raw silhouette {} -> combat {}".format(
+            len(progression["order"]),
+            last["raw"]["silhouette"],
+            last["combat"]["silhouette"] if last["combat"] else "n/a",
+        )
+    )
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("ANTHROPIC_API_KEY not set — cannot standardize survival. Aborting.")
@@ -125,19 +139,23 @@ def main() -> int:
     else:
         print(f"GATE FAILED (< {GATE}) — risk not predictive; investigate before shipping.")
 
-    # Persist the network-free bundle + a static payload fallback.
-    bundle = Bundle(model=landscape, matrix=substrate, samples_meta=standardized)
+    # Persist the network-free bundle + static-file fallbacks.
+    bundle = Bundle(model=landscape, matrix=substrate, samples_meta=standardized, pca=progression)
     bundle_path = save_bundle(bundle, args.out)
 
     base_layers = _build_base_layers(bundle)
     payload = landscape_payload(landscape, standardized, base_layers, grid=args.grid)
-    payload_path = Path("outputs") / "landscape_payload.json"
-    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    out_dir = Path("outputs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload_path = out_dir / "landscape_payload.json"
     payload_path.write_text(json.dumps(payload))
+    pca_path = out_dir / "pca_progression.json"
+    pca_path.write_text(json.dumps(progression))
 
     print(f"\nwrote {bundle_path}")
     print(f"wrote {payload_path} ({len(payload['samples'])} samples, "
           f"{len(payload['height_options'])} height options)")
+    print(f"wrote {pca_path} ({len(progression['steps'])} steps)")
     return 0
 
 

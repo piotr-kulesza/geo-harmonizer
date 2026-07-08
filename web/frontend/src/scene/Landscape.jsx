@@ -4,13 +4,10 @@ import { OrbitControls, FlyControls } from '@react-three/drei'
 import * as THREE from 'three'
 import { surfaceToMesh } from '../geometry.js'
 import { heightToColor, normalize } from '../color.js'
-
-// Categorical palette for the "colour by dataset" mode.
-const DATASET_COLORS = ['#4f9dd9', '#e0b64f', '#7ed08f', '#d94f6a', '#a17ee0', '#e08a4f']
+import { datasetHex } from '../palette.js'
 
 function datasetColor(name, order) {
-  const i = order.indexOf(name)
-  return new THREE.Color(DATASET_COLORS[(i < 0 ? 0 : i) % DATASET_COLORS.length])
+  return new THREE.Color(datasetHex(name, order))
 }
 
 function extent(arr) {

@@ -16,7 +16,22 @@ with warnings.catch_warnings():
     from fastapi.testclient import TestClient  # noqa: E402
 
 from core.landscape import LandscapeModel, cv_cindex, embed, fit_risk  # noqa: E402
+from core.projection import progressive_projection  # noqa: E402
 from web.api import Bundle, create_app  # noqa: E402
+
+
+def _bundle_with_pca(seed: int = 0) -> Bundle:
+    """A bundle carrying a precomputed PCA progression (for GET /api/pca)."""
+    b = _bundle(seed=seed)
+    batch = b.samples_meta["dataset"]
+    # Simulated ComBat: remove each batch's per-gene mean, restore the global mean.
+    gm = b.matrix.mean(axis=1)
+    corrected = b.matrix.copy()
+    for acc in batch.unique():
+        cols = [c for c in b.matrix.columns if batch[c] == acc]
+        corrected[cols] = b.matrix[cols].sub(b.matrix[cols].mean(axis=1), axis=0).add(gm, axis=0)
+    prog = progressive_projection(b.matrix, batch, corrected=corrected)
+    return Bundle(model=b.model, matrix=b.matrix, samples_meta=b.samples_meta, pca=prog)
 
 
 # --------------------------------------------------------------------------- #
@@ -170,6 +185,33 @@ def test_interpret_hallucinated_gene_is_422(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# GET /api/pca — the harmonization progression (Act 1)
+# --------------------------------------------------------------------------- #
+def test_get_pca_returns_progression(tmp_path):
+    client = _client(bundle=_bundle_with_pca(), tmp_path=tmp_path)
+    resp = client.get("/api/pca")
+    assert resp.status_code == 200
+    prog = resp.json()
+    assert set(prog) == {"axes", "order", "batch", "steps"}
+    assert len(prog["axes"]["explained_variance"]) == 2
+    assert len(prog["steps"]) == len(prog["order"])
+    last = prog["steps"][-1]
+    assert set(last) == {"k", "included", "raw", "combat"}
+    assert set(last["raw"]) == {"coords", "silhouette"}
+    # ComBat state present and reduces batch separation.
+    assert last["combat"] is not None
+    assert last["raw"]["silhouette"] > last["combat"]["silhouette"]
+
+
+def test_get_pca_without_progression_is_503(tmp_path):
+    # A bundle that predates Act 1 (no pca) -> 503 with a rebuild hint, not a 500.
+    client = _client(bundle=_bundle(), tmp_path=tmp_path)
+    resp = client.get("/api/pca")
+    assert resp.status_code == 503
+    assert "PCA progression" in resp.json()["detail"]
+
+
+# --------------------------------------------------------------------------- #
 # Missing-cache path — 503, no crash
 # --------------------------------------------------------------------------- #
 def test_missing_cache_returns_503(tmp_path):
@@ -177,6 +219,7 @@ def test_missing_cache_returns_503(tmp_path):
     client = _client(bundle=None, tmp_path=tmp_path)
     for method, path, body in [
         ("get", "/api/landscape", None),
+        ("get", "/api/pca", None),
         ("post", "/api/height", {"kind": "gene", "value": "EGFR"}),
         ("post", "/api/height/interpret", {"query": "x"}),
     ]:

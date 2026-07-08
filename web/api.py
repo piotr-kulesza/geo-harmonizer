@@ -77,11 +77,15 @@ class Bundle:
             risk model + CV C-index).
         matrix: harmonized/ComBat-corrected expression (genes x samples).
         samples_meta: standardized metadata (GSM index) — ``dataset`` + survival.
+        pca: the precomputed fixed-basis progressive-PCA progression (Act 1), the
+            JSON payload :func:`core.projection.progressive_projection` returns, or
+            ``None`` if the cache predates it.
     """
 
     model: LandscapeModel
     matrix: pd.DataFrame
     samples_meta: pd.DataFrame
+    pca: Optional[dict] = None
 
 
 def save_bundle(bundle: Bundle, cache_dir: str = DEFAULT_CACHE_DIR) -> Path:
@@ -312,6 +316,20 @@ def create_app(
                 b.model, b.samples_meta, layers, grid=state["grid"]
             )
         return state["base_payload"]
+
+    @app.get("/api/pca")
+    def get_pca() -> dict:
+        b = _require_bundle()
+        prog = getattr(b, "pca", None)
+        if not prog:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PCA progression not in the cache. Re-run "
+                    "scripts/build_landscape_cache.py to bake it."
+                ),
+            )
+        return prog
 
     @app.post("/api/height")
     def post_height(payload: dict = Body(...)) -> dict:

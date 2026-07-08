@@ -39,11 +39,22 @@ Open http://localhost:8000.
 
 ## Static / offline
 
-With no backend reachable, the app renders from the bundled snapshot
-`public/landscape_payload.json` (same shape as `GET /api/landscape`) and shows a
-**STATIC** badge; the gene/signature and Ask-Claude boxes are disabled with a
-hint. Regenerate the snapshot from real data by running the precompute script and
-copying `outputs/landscape_payload.json` over `public/landscape_payload.json`.
+With no backend reachable, the app renders from bundled snapshots and shows a
+**STATIC** badge:
+
+- **Landscape (Act 2):** `public/landscape_payload.json` (shape of `GET /api/landscape`).
+  The gene/signature and Ask-Claude boxes are disabled with a hint.
+- **Harmonize (Act 1):** `public/pca_progression.json` (shape of `GET /api/pca`).
+  Reveal + the ComBat morph still animate off the snapshot.
+
+Regenerate both from real data by running `scripts/build_landscape_cache.py`, then
+copying `outputs/landscape_payload.json` over `public/landscape_payload.json` **and**
+`outputs/pca_progression.json` over `public/pca_progression.json`.
+
+## Two acts
+
+A top switcher toggles **① Harmonize** (progressive PCA + ComBat morph) and
+**② Landscape** (the 3D risk terrain); the choice persists across reloads.
 
 ## Test
 

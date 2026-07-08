@@ -27,6 +27,25 @@ export async function loadLandscape() {
   return { ...payload, source: 'static' }
 }
 
+// loadPca(): the fixed-projection progressive-PCA progression (Act 1). Tries the
+// live API, else the bundled static snapshot. Mirrors loadLandscape's contract.
+export async function loadPca() {
+  try {
+    const resp = await fetch(`${API_BASE}/api/pca`, { headers: { Accept: 'application/json' } })
+    if (resp.ok) {
+      const payload = await resp.json()
+      return { ...payload, source: 'live' }
+    }
+  } catch {
+    // backend down / no progression — fall through to the static snapshot
+  }
+  const staticUrl = `${import.meta.env.BASE_URL}pca_progression.json`
+  const resp = await fetch(staticUrl)
+  if (!resp.ok) throw new Error('could not load PCA progression (no backend and no static snapshot)')
+  const payload = await resp.json()
+  return { ...payload, source: 'static' }
+}
+
 // recomputeHeight({kind, value}): POST /api/height. Returns the height sub-shape on
 // 200; on 422 returns { error: "<message>" }; in static mode returns BACKEND_NEEDED.
 export async function recomputeHeight({ kind, value }, source) {
