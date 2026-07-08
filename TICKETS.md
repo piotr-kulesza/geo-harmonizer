@@ -70,21 +70,21 @@ dataset) and the fix (ComBat merges them by biology), legibly, in one take.
             mapping happens separately anyway.
 
 ## Epic 2 — core.harmonize (Day 2)
-- [ ] 2.1 **(Claude, tool-choice)** Decide probe->symbol source per platform
+- [x] 2.1 **(Claude, tool-choice)** Decide probe->symbol source per platform
       (mygene vs pybiomart vs GPL table). Ask Claude to compare, don't just code.
-- [ ] 2.2 `map_probes(expr, platform_id, collapse)` -> gene x sample matrix.
-- [ ] 2.3 Many-probes-to-one-gene collapse (`max`/`mean`); drop unmapped.
-- [ ] 2.4 `to_log2()` with a **double-log2 guard**: if the matrix max is < ~30,
+- [x] 2.2 `map_probes(expr, platform_id, collapse)` -> gene x sample matrix.
+- [x] 2.3 Many-probes-to-one-gene collapse (`max`/`mean`); drop unmapped.
+- [x] 2.4 `to_log2()` with a **double-log2 guard**: if the matrix max is < ~30,
       treat it as already logged and skip; else log2. Never blindly transform —
       double-logging squashes everything and quietly ruins the PCA.
-- [ ] 2.5 End-to-end terminal test: list of GSE -> per-series gene x sample matrix.
-- [ ] 2.6 Unit test: collapse + log2 on a tiny synthetic matrix (both scales).
-- [ ] 2.7 Cache probe/gene annotations (mygene/pybiomart are network-flaky) so
+- [x] 2.5 End-to-end terminal test: list of GSE -> per-series gene x sample matrix.
+- [x] 2.6 Unit test: collapse + log2 on a tiny synthetic matrix (both scales).
+- [x] 2.7 Cache probe/gene annotations (mygene/pybiomart are network-flaky) so
       harmonize is offline-repeatable and demo-safe.
 
 ## Epic 3 — core.merge + combat (Day 2 end — pure mechanics, moved off Day 3)
-- [ ] 3.1 `merge({acc: matrix})` -> merged matrix on shared gene set + batch labels.
-- [ ] 3.2 Report shared-gene count and per-dataset sample counts (UI needs these).
+- [x] 3.1 `merge({acc: matrix})` -> merged matrix on shared gene set + batch labels.
+- [x] 3.2 Report shared-gene count and per-dataset sample counts (UI needs these).
 - [ ] 3.3 `combat(merged, batch)` wrapping inmoose/neuroCombat; OFF by default.
 - [ ] 3.4 **PCA validation (HARD GATE for the whole demo):** using a FIXED
       projection (fit PCA once on the final combined matrix, project each step into

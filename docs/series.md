@@ -39,12 +39,37 @@ Same-modality cross-platform ovarian pairs that historically behave well:
 | GSE26712  | GPL96 (Affy U133A)        | Bonome — different Affy chip, same modality; sizeable shared gene set with GPL570. |
 | GSE26193  | GPL570 (Affy U133 Plus 2) | Mateescu — has survival; third cloud / metadata contrast. |
 
-## Your final set (fill in)
-_Chosen accessions + why each earns its place:_
+## Final chosen set (LOCKED — validated live via series-matrix fetch)
 
-1. ___  (platform: ___)  — carries: [PCA] [mismatch] [marker]
-2. ___  (platform: ___)  — carries: [PCA] [mismatch] [marker]
-3. ___  (platform: ___)  — carries: [PCA] [mismatch] [marker]
+1. **GSE9891** — GPL570, 285 samples, 9 metadata fields (Tothill). Stage uppercase
+   (`stagecode`: IIIC/IA), grade numeric, histology as abbreviations
+   (Ser/PapSer/Endo/Adeno). Contains LMP (borderline) tumors. No survival fields.
+2. **GSE26193** — GPL570, 107 samples, 13 fields (Mateescu). Stage lowercase
+   (`stage`: IIIc/Ia), grade numeric, histology full words; OS *and* PFS
+   (`os/pfs time (years)` + `os/pfs event` 0/1).
+3. **GSE26712** — GPL96, 195 samples, 8 fields (Bonome). No stage field; grade only
+   inside free text ("late-stage high-grade"); survival as `survival years` +
+   `status` text codes (AWD/NED/DOD). Contains normal-epithelium controls.
 
-- **Batch-masked marker chosen:** ___  (why you expect it masked pre-ComBat)
-- **Seeded metadata mismatch:** ___  (which fields clash across which series)
+Two GPL570 + one GPL96 → cross-platform, same modality (log-intensity microarray).
+
+## Real metadata clashes for the verifier (Day 3 fuel — no seeding needed)
+- **Stage:** FIGO casing differs (IIIC vs IIIc); absent in GSE26712.
+- **Grade:** numeric field in two; embedded in prose (`tissue`) in GSE26712.
+- **Survival:** units (years → target days) + event encoding (AWD/NED/DOD text vs
+  0/1) + OS-vs-PFS disambiguation in GSE26193.
+- **Histology:** abbreviations (Ser/PapSer) vs full words (Serous).
+- **Population:** GSE9891 has LMP borderline; GSE26712 has normal controls — not
+  the same comparable cohort.
+
+## Batch-masked marker (Day-5 reveal — decide with merged data in hand)
+Choose empirically once merge + ComBat exist (Epic 3): pick an HGSOC gene whose
+cross-dataset signal is confounded by batch pre-ComBat and coherent after.
+Candidates to check first: WT1, PAX8 (canonical serous markers). Not a Day-2
+blocker; validated at Epic 8.4.
+
+## PCA note (Epic 3.4)
+Consider restricting the hero PCA to comparable malignant serous tumors (drop
+GSE9891's LMP and GSE26712's normals) so the clouds reflect batch, not sample-type
+biology. The whole-dataset batch effect will dominate regardless — decide when the
+matrix is in hand.
