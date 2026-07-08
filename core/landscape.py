@@ -367,11 +367,15 @@ class LandscapeModel:
         coords: samples (GSM index) x ``[x, y]`` — the fixed terrain.
         risk_model: the fitted :class:`RiskModel`, or ``None`` if no survival.
         layers: height layers by name.
+        cindex: the risk model's cross-validated C-index (the validation gate),
+            or ``None`` if not scored. Carried here so the payload/meta can report
+            it without re-touching the matrix.
     """
 
     coords: pd.DataFrame
     risk_model: Optional[RiskModel] = None
     layers: dict[str, HeightLayer] = field(default_factory=dict)
+    cindex: Optional[float] = None
 
     def add_layer(self, layer: HeightLayer) -> "LandscapeModel":
         """Register a height layer (same map, any scalar). Returns self."""
@@ -383,6 +387,169 @@ class LandscapeModel:
         if layer_name not in self.layers:
             raise KeyError(f"no height layer named {layer_name!r}; have {list(self.layers)}")
         return surface(self.coords, self.layers[layer_name], grid=grid, method=method)
+
+
+# --------------------------------------------------------------------------- #
+# JSON payload (the contract the web/MCP layer serves to the 3D frontend)
+# --------------------------------------------------------------------------- #
+def usable_survival_ids(samples_meta: Optional[pd.DataFrame], sample_ids) -> list[str]:
+    """GSMs (within ``sample_ids``) with survival usable by the risk model.
+
+    Mirrors :func:`_align_survival` EXACTLY — numeric ``survival_days`` > 0 and a
+    defined numeric ``event`` — so counts here match the samples the model fits
+    and cannot drift. Returns them in ``sample_ids`` order; ``[]`` if the frame
+    lacks the survival columns.
+    """
+    if (
+        samples_meta is None
+        or "survival_days" not in samples_meta.columns
+        or "event" not in samples_meta.columns
+    ):
+        return []
+    shared = [g for g in sample_ids if g in samples_meta.index]
+    dur = pd.to_numeric(samples_meta.loc[shared, "survival_days"], errors="coerce")
+    evt = pd.to_numeric(samples_meta.loc[shared, "event"], errors="coerce")
+    keep = dur.notna() & evt.notna() & (dur > 0)
+    return [g for g, k in zip(shared, keep) if k]
+
+
+def held_out_series(samples_meta: Optional[pd.DataFrame], sample_ids) -> list[str]:
+    """Datasets (series) with ZERO usable-survival samples — the corrected rule.
+
+    A series is "held out" (did not supervise the map, its placement tests
+    generalization) only when NONE of its samples carry usable survival — never
+    merely because some rows are NaN. Returns a sorted list.
+    """
+    if samples_meta is None or "dataset" not in samples_meta.columns:
+        return []
+    usable = set(usable_survival_ids(samples_meta, sample_ids))
+    ds = samples_meta.reindex(list(sample_ids))["dataset"]
+    held = [
+        str(series)
+        for series, grp in ds.groupby(ds)
+        if not any(g in usable for g in grp.index)
+    ]
+    return sorted(held)
+
+
+def _json_float(value) -> Optional[float]:
+    """Cast to a JSON-safe float; non-finite / missing -> ``None`` (JSON null)."""
+    if value is None:
+        return None
+    v = float(value)
+    return v if np.isfinite(v) else None
+
+
+def _surface_json(coords: pd.DataFrame, layer: HeightLayer, grid: int) -> dict:
+    """Serialize a hull-clipped surface to ``{gx, gy, z}`` with ``NaN`` -> null."""
+    XX, YY, ZZ = surface(coords, layer, grid=grid, extrapolate=False)
+    return {
+        "gx": [float(v) for v in XX[0, :]],
+        "gy": [float(v) for v in YY[:, 0]],
+        "z": [[_json_float(v) for v in row] for row in ZZ],
+    }
+
+
+def height_subpayload(
+    coords: pd.DataFrame,
+    key: str,
+    label: str,
+    kind: str,
+    layer: HeightLayer,
+    *,
+    grid: int = 60,
+) -> dict:
+    """One height selection's sub-shape: ``{key,label,kind,heights,surface}``.
+
+    ``heights`` is ``{GSM: float|null}`` (deterministic, ordered by GSM); ``surface``
+    is the hull-clipped ``{gx,gy,z}`` grid. Shared by the web ``/api/height`` and
+    ``/api/height/interpret`` routes so a recomputed selection matches the baked
+    payload's shape exactly. PURE.
+    """
+    heights = layer.values.reindex(coords.index)
+    return {
+        "key": key,
+        "label": label,
+        "kind": kind,
+        "heights": {gsm: _json_float(heights.get(gsm)) for gsm in sorted(coords.index)},
+        "surface": _surface_json(coords, layer, grid),
+    }
+
+
+def landscape_payload(
+    model: LandscapeModel,
+    samples_meta: Optional[pd.DataFrame],
+    height_layers: dict,
+    *,
+    grid: int = 60,
+) -> dict:
+    """Build the JSON-serializable landscape contract the 3D frontend consumes.
+
+    PURE — no web imports, no I/O. Deterministic ordering everywhere; every
+    non-finite grid cell (``NaN``) serializes to JSON ``null``.
+
+    Args:
+        model: the fixed map (``coords``) plus fitted risk model and CV C-index.
+        samples_meta: standardized metadata (GSM index) with at least a
+            ``dataset`` column and, where available, ``survival_days`` + ``event``
+            — used for per-sample dataset labels and the held-out reporting.
+        height_layers: ``{key: (label, kind, HeightLayer)}`` where ``kind`` is one
+            of ``"risk"``/``"signature"``/``"gene"``. Each layer's per-sample
+            heights and a hull-clipped :func:`surface` are baked into the payload.
+        grid: surface mesh resolution per axis.
+
+    Returns (shape the frontend depends on)::
+
+        {
+          "samples": [{"id","x","y","dataset","heights":{key: float|null}}],
+          "surfaces": {key: {"gx":[...], "gy":[...], "z":[[float|null,...]]}},
+          "height_options": [{"key","label","kind"}],
+          "meta": {"cindex": float|null, "n_supervised": int,
+                   "held_out": [str], "n_samples": int},
+        }
+    """
+    coords = model.coords
+    ids = sorted(coords.index)  # samples ordered by GSM
+
+    dataset = (
+        samples_meta["dataset"].reindex(coords.index)
+        if (samples_meta is not None and "dataset" in samples_meta.columns)
+        else pd.Series(index=coords.index, dtype="object")
+    )
+
+    surfaces: dict[str, dict] = {}
+    options: list[dict] = []
+    per_sample_heights: dict[str, pd.Series] = {}
+    for key, (label, kind, layer) in height_layers.items():
+        per_sample_heights[key] = layer.values.reindex(coords.index)
+        surfaces[key] = _surface_json(coords, layer, grid)
+        options.append({"key": key, "label": label, "kind": kind})
+
+    samples = []
+    for gsm in ids:
+        ds = dataset.get(gsm)
+        samples.append(
+            {
+                "id": gsm,
+                "x": float(coords.loc[gsm, "x"]),
+                "y": float(coords.loc[gsm, "y"]),
+                "dataset": None if ds is None or (isinstance(ds, float) and np.isnan(ds)) else str(ds),
+                "heights": {k: _json_float(per_sample_heights[k].get(gsm)) for k in height_layers},
+            }
+        )
+
+    meta = {
+        "cindex": _json_float(model.cindex),
+        "n_supervised": len(usable_survival_ids(samples_meta, coords.index)),
+        "held_out": held_out_series(samples_meta, coords.index),
+        "n_samples": int(coords.shape[0]),
+    }
+    return {
+        "samples": samples,
+        "surfaces": surfaces,
+        "height_options": options,
+        "meta": meta,
+    }
 
 
 # --------------------------------------------------------------------------- #

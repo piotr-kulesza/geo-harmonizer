@@ -23,6 +23,12 @@ ENV/
 # Data cache (never commit fetched GEO files)
 data/cache/
 
+# Generated landscape artifacts (precompute cache + payload JSON) — regenerated
+# by scripts/build_landscape_cache.py, never swept in via `git add -A`. The
+# committed demo renders (outputs/*.png) stay tracked via the negation below.
+outputs/
+!outputs/*.png
+
 # Web
 web/node_modules/
 web/dist/

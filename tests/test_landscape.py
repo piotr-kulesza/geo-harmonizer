@@ -16,6 +16,8 @@ from core.landscape import (
     embed,
     fit_risk,
     gene_layer,
+    height_subpayload,
+    landscape_payload,
     predict_risk,
     risk_layer,
     signature_layer,
@@ -342,3 +344,91 @@ def test_usable_survival_matches_align_survival_criterion():
     report_usable = set(lc._usable_survival(std, matrix.columns))
     expr, _, _ = _align_survival(matrix, std[["survival_days", "event"]])
     assert report_usable == set(expr.index)
+
+
+# --------------------------------------------------------------------------- #
+# landscape_payload — the JSON contract the 3D frontend consumes
+# --------------------------------------------------------------------------- #
+def _payload_fixture():
+    """A small model + metadata + height layers. Dataset A has survival, B none."""
+    matrix, survival = _planted(n_samples=40, n_genes=60)
+    # Split into two datasets; B's survival is withheld (all-NA) so it is held out.
+    ids = list(matrix.columns)
+    datasets = ["A"] * 28 + ["B"] * (len(ids) - 28)
+    meta = pd.DataFrame({"dataset": datasets}, index=ids)
+    meta["survival_days"] = survival["survival_days"]
+    meta["event"] = survival["event"]
+    meta.loc[[g for g, d in zip(ids, datasets) if d == "B"], ["survival_days", "event"]] = np.nan
+
+    surv_used = meta.loc[meta["dataset"] == "A", ["survival_days", "event"]]
+    coords = embed(matrix, n_components=2)
+    model = fit_risk(matrix, surv_used, n_pca=10)
+    c = cv_cindex(matrix, surv_used, folds=4, n_pca=10)
+    lm = LandscapeModel(coords=coords, risk_model=model, cindex=c)
+    layers = {
+        "risk": ("Predicted risk", "risk", risk_layer(model, matrix)),
+        "prolif": ("Proliferation", "signature", signature_layer(matrix, ["g0", "g1", "g2"], "prolif")),
+        "g5": ("g5", "gene", gene_layer(matrix, "g5")),
+    }
+    return lm, meta, layers, matrix
+
+
+def test_landscape_payload_shape_and_keys():
+    import json
+
+    lm, meta, layers, _ = _payload_fixture()
+    payload = landscape_payload(lm, meta, layers, grid=15)
+
+    assert set(payload) == {"samples", "surfaces", "height_options", "meta"}
+    # samples: ordered by GSM, each with the full height set
+    assert [s["id"] for s in payload["samples"]] == sorted(lm.coords.index)
+    s0 = payload["samples"][0]
+    assert set(s0) == {"id", "x", "y", "dataset", "heights"}
+    assert set(s0["heights"]) == {"risk", "prolif", "g5"}
+    # height_options non-empty and well-formed
+    assert payload["height_options"]
+    assert all(set(o) == {"key", "label", "kind"} for o in payload["height_options"])
+    # surfaces: one per layer, grid-shaped
+    assert set(payload["surfaces"]) == {"risk", "prolif", "g5"}
+    surf = payload["surfaces"]["risk"]
+    assert len(surf["gx"]) == 15 and len(surf["gy"]) == 15
+    assert len(surf["z"]) == 15 and all(len(row) == 15 for row in surf["z"])
+    # meta
+    assert payload["meta"]["n_samples"] == lm.coords.shape[0]
+    assert isinstance(payload["meta"]["cindex"], float)
+    # fully JSON-serializable (no NaN/inf leaks)
+    json.dumps(payload)
+
+
+def test_landscape_payload_nan_surface_cells_are_null():
+    lm, meta, layers, _ = _payload_fixture()
+    payload = landscape_payload(lm, meta, layers, grid=20)
+    z = payload["surfaces"]["risk"]["z"]
+    flat = [cell for row in z for cell in row]
+    assert any(cell is None for cell in flat)  # outside the hull -> null
+    assert any(isinstance(cell, float) for cell in flat)  # inside -> finite float
+    assert all(cell is None or isinstance(cell, float) for cell in flat)
+
+
+def test_landscape_payload_is_deterministic():
+    lm, meta, layers, _ = _payload_fixture()
+    a = landscape_payload(lm, meta, layers, grid=12)
+    b = landscape_payload(lm, meta, layers, grid=12)
+    import json
+
+    assert json.dumps(a) == json.dumps(b)
+
+
+def test_landscape_payload_meta_holds_out_only_zero_usable_series():
+    lm, meta, layers, _ = _payload_fixture()
+    payload = landscape_payload(lm, meta, layers, grid=12)
+    assert payload["meta"]["held_out"] == ["B"]  # only the zero-usable series
+    assert payload["meta"]["n_supervised"] == 28  # dataset A's samples
+
+
+def test_height_subpayload_shape():
+    lm, meta, layers, matrix = _payload_fixture()
+    sub = height_subpayload(lm.coords, "gene:g7", "g7", "gene", gene_layer(matrix, "g7"), grid=12)
+    assert set(sub) == {"key", "label", "kind", "heights", "surface"}
+    assert set(sub["heights"]) == set(lm.coords.index)
+    assert set(sub["surface"]) == {"gx", "gy", "z"}
