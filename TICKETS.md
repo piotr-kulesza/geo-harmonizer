@@ -85,13 +85,13 @@ dataset) and the fix (ComBat merges them by biology), legibly, in one take.
 ## Epic 3 — core.merge + combat (Day 2 end — pure mechanics, moved off Day 3)
 - [x] 3.1 `merge({acc: matrix})` -> merged matrix on shared gene set + batch labels.
 - [x] 3.2 Report shared-gene count and per-dataset sample counts (UI needs these).
-- [ ] 3.3 `combat(merged, batch)` wrapping inmoose/neuroCombat; OFF by default.
-- [ ] 3.4 **PCA validation (HARD GATE for the whole demo):** using a FIXED
+- [x] 3.3 `combat(merged, batch)` wrapping inmoose/neuroCombat; OFF by default.
+- [x] 3.4 **PCA validation (HARD GATE for the whole demo):** using a FIXED
       projection (fit PCA once on the final combined matrix, project each step into
       it — never refit per step), compute PCA before/after ComBat on the demo set.
       Confirm clouds visibly split by dataset then merge AND the shared-gene count
       is large enough to plot. If not clean, swap series NOW — not on Day 5.
-- [ ] 3.5 Unit test: merge intersects genes correctly; combat preserves shape.
+- [x] 3.5 Unit test: merge intersects genes correctly; combat preserves shape.
 
 ## Epic 4 — core.metadata + Claude (Day 3 — the Claude Use quadrant)
 - [ ] 4.1 Define `TARGET_SCHEMA` (stage, grade, histology, survival_days, event).
